@@ -29,7 +29,9 @@ assert_file() {
 }
 
 assert_absent() {
-  [ ! -e "$1" ] && [ ! -L "$1" ] || fail "unexpected path: $1"
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    fail "unexpected path: $1"
+  fi
 }
 
 assert_contains() {

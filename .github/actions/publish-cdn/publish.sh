@@ -194,7 +194,9 @@ validate_upload_plan() {
     reject_control "$source" "upload source"
     validate_object_name "$destination"
     validate_sha256 "$expected_sha"
-    [ -f "$source" ] && [ ! -L "$source" ] || die "upload source is not a regular file: $source"
+    if [ ! -f "$source" ] || [ -L "$source" ]; then
+      die "upload source is not a regular file: $source"
+    fi
     source_real="$(realpath -e "$source")"
     case "$source_real" in
       "$artifacts_real"/*) ;;
@@ -394,8 +396,9 @@ validate_durable_journal() {
         validate_sha256 "$old_sha"
         ;;
       absent)
-        [ "$backup_object" = - ] && [ "$old_sha" = - ] \
-          || die "absent journal entry has backup data: $destination"
+        if [ "$backup_object" != - ] || [ "$old_sha" != - ]; then
+          die "absent journal entry has backup data: $destination"
+        fi
         ;;
       *) die "journal contains an invalid state for $destination: $state" ;;
     esac
@@ -750,8 +753,9 @@ validate_environment() {
     [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] \
       || die "RELEASE_TAG is invalid"
   fi
-  [ -d "$PUBLISH_ARTIFACT_DIRECTORY" ] && [ ! -L "$PUBLISH_ARTIFACT_DIRECTORY" ] \
-    || die "artifact directory must be a real directory"
+  if [ ! -d "$PUBLISH_ARTIFACT_DIRECTORY" ] || [ -L "$PUBLISH_ARTIFACT_DIRECTORY" ]; then
+    die "artifact directory must be a real directory"
+  fi
   [ -d "$GITHUB_ACTION_PATH" ] || die "GITHUB_ACTION_PATH is not a directory"
 }
 
@@ -759,8 +763,9 @@ configure_clients() {
   local oss_endpoint="${ALIYUN_OSS_ENDPOINT#https://}"
   ossutil_bin="$RUNNER_TEMP/chat2db-cdn-tools/ossutil"
   aliyun_bin="$RUNNER_TEMP/chat2db-cdn-tools/aliyun"
-  [ -x "$ossutil_bin" ] && [ -x "$aliyun_bin" ] \
-    || die "pinned Alibaba Cloud clients were not installed"
+  if [ ! -x "$ossutil_bin" ] || [ ! -x "$aliyun_bin" ]; then
+    die "pinned Alibaba Cloud clients were not installed"
+  fi
 
   oss_config="$RUNNER_TEMP/chat2db-ossutil.config"
   umask 077

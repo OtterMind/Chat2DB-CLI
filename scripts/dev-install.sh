@@ -561,10 +561,10 @@ else
   : > "$TX_BUILD/cli-original-hash"
 fi
 if [ -e "$PROVENANCE_FILE" ]; then
-  [ -f "$PROVENANCE_FILE" ] && [ ! -L "$PROVENANCE_FILE" ] || {
+  if [ ! -f "$PROVENANCE_FILE" ] || [ -L "$PROVENANCE_FILE" ]; then
     echo "error: refusing unsafe CLI provenance: $PROVENANCE_FILE" >&2
     exit 1
-  }
+  fi
   printf '%s\n' 'present' > "$TX_BUILD/cli-provenance-original-state"
   printf '%s\n' "$(dev_path_hash "$PROVENANCE_FILE")" > "$TX_BUILD/cli-provenance-original-hash"
   dev_copy_path "$PROVENANCE_FILE" "$TX_BUILD/cli-provenance-backup"
@@ -589,10 +589,10 @@ if [ "$INSTALL_SKILL" = "1" ]; then
     : > "$TX_BUILD/skill-original-hash"
   fi
   if [ -e "$SKILL_PROVENANCE" ]; then
-    [ -f "$SKILL_PROVENANCE" ] && [ ! -L "$SKILL_PROVENANCE" ] || {
+    if [ ! -f "$SKILL_PROVENANCE" ] || [ -L "$SKILL_PROVENANCE" ]; then
       echo "error: refusing unsafe Skill provenance: $SKILL_PROVENANCE" >&2
       exit 1
-    }
+    fi
     printf '%s\n' 'present' > "$TX_BUILD/skill-provenance-original-state"
     printf '%s\n' "$(dev_path_hash "$SKILL_PROVENANCE")" > "$TX_BUILD/skill-provenance-original-hash"
     dev_copy_path "$SKILL_PROVENANCE" "$TX_BUILD/skill-provenance-backup"

@@ -217,10 +217,10 @@ acquire_lock() {
   local borrowed="${CHAT2DB_DEV_INSTALL_BORROWED_LOCK:-}" snapshot
 
   if [ -n "$borrowed" ]; then
-    [ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ] || {
+    if [ ! -f "$LOCK_FILE" ] || [ -L "$LOCK_FILE" ]; then
       echo "error: parent Skill installation lock is missing: $LOCK_FILE" >&2
       return 1
-    }
+    fi
     snapshot="$(cat "$LOCK_FILE")"
     dev_valid_lock_snapshot "$snapshot" || {
       echo "error: parent Skill installation lock is malformed: $LOCK_FILE" >&2
@@ -447,10 +447,10 @@ else
   dev_copy_path "$TARGET_DIR" "$TX_BUILD/target-backup"
 fi
 if [ -e "$PROVENANCE_FILE" ] || [ -L "$PROVENANCE_FILE" ]; then
-  [ -f "$PROVENANCE_FILE" ] && [ ! -L "$PROVENANCE_FILE" ] || {
+  if [ ! -f "$PROVENANCE_FILE" ] || [ -L "$PROVENANCE_FILE" ]; then
     echo "error: refusing unsafe Skill provenance: $PROVENANCE_FILE" >&2
     exit 1
-  }
+  fi
   printf '%s\n' 'present' > "$TX_BUILD/provenance-original-state"
   printf '%s\n' "$(dev_path_hash "$PROVENANCE_FILE")" > "$TX_BUILD/provenance-original-hash"
   cp -p "$PROVENANCE_FILE" "$TX_BUILD/provenance-backup"

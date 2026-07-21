@@ -264,13 +264,13 @@ dev_copy_path() {
 dev_prepare_restore_workspace() {
   local workspace="$1" journal="$2" build_path
   if [ -e "$workspace" ] || [ -L "$workspace" ]; then
-    [ -d "$workspace" ] && [ ! -L "$workspace" ] && \
+    if ! { [ -d "$workspace" ] && [ ! -L "$workspace" ] && \
       [ -f "$workspace/metadata" ] && [ ! -L "$workspace/metadata" ] && \
       [ "$(dev_metadata_value "$workspace/metadata" owner)" = "chat2db-dev-install" ] && \
-      [ "$(dev_metadata_value "$workspace/metadata" journal)" = "$journal" ] || {
-        echo "error: unrecognized recovery workspace; refusing to remove it: $workspace" >&2
-        return 1
-      }
+      [ "$(dev_metadata_value "$workspace/metadata" journal)" = "$journal" ]; }; then
+      echo "error: unrecognized recovery workspace; refusing to remove it: $workspace" >&2
+      return 1
+    fi
     return 0
   fi
 
@@ -315,10 +315,10 @@ dev_restore_component() {
   esac
 
   if [ "$state" = "present" ]; then
-    [ -e "$backup" ] && [ ! -L "$backup" ] || {
+    if [ ! -e "$backup" ] || [ -L "$backup" ]; then
       echo "error: $label recovery backup is missing at $journal" >&2
       return 1
-    }
+    fi
     [ "$(dev_path_hash "$backup")" = "$original_hash" ] || {
       echo "error: $label recovery backup hash mismatch at $journal" >&2
       return 1

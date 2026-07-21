@@ -229,10 +229,17 @@ fn status_json_reports_runtime_summary_for_agents() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let local_log = home.join(".chat2db_local_edition/chat2db-enterprise/logs/application.log");
+    let local_log = home
+        .join(".chat2db_local_edition")
+        .join("chat2db-enterprise")
+        .join("logs")
+        .join("application.log");
     std::fs::create_dir_all(local_log.parent().unwrap()).unwrap();
     std::fs::write(&local_log, b"runtime log\n").unwrap();
-    let pro_cookie = home.join(".chat2db/cache/chat2db-enterprise-cookie-release");
+    let pro_cookie = home
+        .join(".chat2db")
+        .join("cache")
+        .join("chat2db-enterprise-cookie-release");
     std::fs::create_dir_all(pro_cookie.parent().unwrap()).unwrap();
     std::fs::write(
         &pro_cookie,
@@ -271,14 +278,17 @@ fn status_json_aggregates_cli_mcp_and_skill_status() {
     let current = temp.path().join("work");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&current).unwrap();
-    let pro_settings = home.join(".chat2db/chat2db_cache_pro/settings.json");
+    let pro_settings = home
+        .join(".chat2db")
+        .join("chat2db_cache_pro")
+        .join("settings.json");
     std::fs::create_dir_all(pro_settings.parent().unwrap()).unwrap();
     std::fs::write(
         &pro_settings,
         r#"{"enableMcp":true,"mcpAuthToken":"secret-token"}"#,
     )
     .unwrap();
-    let codex_skill = home.join(".codex/skills/chat2db-cli");
+    let codex_skill = home.join(".codex").join("skills").join("chat2db-cli");
     std::fs::create_dir_all(&codex_skill).unwrap();
     std::fs::write(
         codex_skill.join("SKILL.md"),
@@ -318,7 +328,10 @@ fn mcp_status_json_reports_both_editions_by_default() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let pro_settings = home.join(".chat2db/chat2db_cache_pro/settings.json");
+    let pro_settings = home
+        .join(".chat2db")
+        .join("chat2db_cache_pro")
+        .join("settings.json");
     std::fs::create_dir_all(pro_settings.parent().unwrap()).unwrap();
     std::fs::write(
         &pro_settings,
@@ -448,17 +461,16 @@ fn dry_run_reports_paths_risk_and_next_action_without_writing() {
     assert_eq!(data["client"], "codex");
     assert_eq!(data["risk"]["level"], "high-risk-write");
     assert_eq!(data["confirmation_required"], true);
+    let expected_target = home.join(".codex").join("skills").join("chat2db-cli");
     assert_eq!(
         data["paths_affected"][0],
-        home.join(".codex/skills/chat2db-cli")
-            .to_string_lossy()
-            .as_ref()
+        expected_target.to_string_lossy().as_ref()
     );
     assert_eq!(
         data["next_action_command"],
         "chat2db skill install --client codex --force --yes --json"
     );
-    assert!(!home.join(".codex/skills/chat2db-cli").exists());
+    assert!(!expected_target.exists());
 }
 
 #[test]

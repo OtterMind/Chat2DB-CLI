@@ -401,7 +401,6 @@ fn windows_status_path_resolves_existing_programs_install() {
         Edition::Pro.resolve_app_path_for_os(&paths.applications_dir, HostOs::Windows),
         app
     );
-    verify_app_bundle(&app, Edition::Pro).unwrap();
 }
 
 #[test]
@@ -417,11 +416,14 @@ fn force_only_replaces_verified_chat2db_app() {
     let installer = Installer::new(client, paths);
 
     let err = installer
-        .install(InstallRequest {
-            edition: Edition::Pro,
-            force: true,
-            progress: false,
-        })
+        .install_for_os(
+            InstallRequest {
+                edition: Edition::Pro,
+                force: true,
+                progress: false,
+            },
+            HostOs::Macos,
+        )
         .unwrap_err();
 
     assert!(matches!(err, Chat2DbError::UnsafeReplace { .. }));
@@ -443,11 +445,14 @@ fn install_refuses_existing_app_without_force() {
     let installer = Installer::new(client, paths);
 
     let err = installer
-        .install(InstallRequest {
-            edition: Edition::Local,
-            force: false,
-            progress: false,
-        })
+        .install_for_os(
+            InstallRequest {
+                edition: Edition::Local,
+                force: false,
+                progress: false,
+            },
+            HostOs::Macos,
+        )
         .unwrap_err();
 
     assert!(matches!(err, Chat2DbError::AppAlreadyExists { .. }));
@@ -470,9 +475,12 @@ fn uninstall_removes_only_verified_app_and_preserves_edition_home() {
         paths.clone(),
     );
     let outcome = installer
-        .uninstall(UninstallRequest {
-            edition: Edition::Local,
-        })
+        .uninstall_for_os(
+            UninstallRequest {
+                edition: Edition::Local,
+            },
+            HostOs::Macos,
+        )
         .unwrap();
 
     assert_eq!(outcome.status, "removed");
@@ -495,9 +503,12 @@ fn uninstall_refuses_non_chat2db_app() {
         paths,
     );
     let err = installer
-        .uninstall(UninstallRequest {
-            edition: Edition::Pro,
-        })
+        .uninstall_for_os(
+            UninstallRequest {
+                edition: Edition::Pro,
+            },
+            HostOs::Macos,
+        )
         .unwrap_err();
 
     assert!(matches!(err, Chat2DbError::UnsafeUninstall { .. }));

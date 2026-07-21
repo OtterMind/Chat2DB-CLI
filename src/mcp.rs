@@ -993,7 +993,7 @@ fn connect_error_state(addr: SocketAddr, error: &std::io::Error) -> EndpointStat
 mod tests {
     use std::cell::RefCell;
     use std::fs;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::Path;
     use std::thread;
@@ -1519,6 +1519,9 @@ mod tests {
         let url = format!("http://{}/mcp", listener.local_addr().unwrap());
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            let bytes_read = stream.read(&mut request).unwrap();
+            assert!(bytes_read > 0);
             if delay > Duration::ZERO {
                 thread::sleep(delay);
             }

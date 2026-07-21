@@ -1,0 +1,46 @@
+name: Publish Chat2DB delivery
+description: Upload immutable CLI and Skill objects, with durable latest-promotion recovery and optional GitHub Release publication.
+
+inputs:
+  artifact-directory:
+    description: Directory containing the complete validated GitHub Release asset bundle.
+    required: true
+  mode:
+    description: Publication mode, either cdn-only or release.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Alibaba Cloud clients
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+          echo 'error: publish-cdn currently requires a Linux x86_64 runner' >&2
+          exit 1
+        fi
+        tools_dir="$RUNNER_TEMP/chat2db-cdn-tools"
+        rm -rf "$tools_dir"
+        mkdir -p "$tools_dir"
+
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$tools_dir/ossutil.zip" \
+          https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
+        echo 'dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343  '"$tools_dir/ossutil.zip" | sha256sum --check
+        unzip -q -j "$tools_dir/ossutil.zip" '*/ossutil' -d "$tools_dir"
+        chmod 0755 "$tools_dir/ossutil"
+
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$tools_dir/aliyun-cli.tgz" \
+          https://github.com/aliyun/aliyun-cli/releases/download/v3.4.8/aliyun-cli-linux-3.4.8-amd64.tgz
+        echo '359419867fb8e850f327745315a312f1ec9749e64ec8747cc8b09f67d6df4868  '"$tools_dir/aliyun-cli.tgz" | sha256sum --check
+        tar -xzf "$tools_dir/aliyun-cli.tgz" -C "$tools_dir" aliyun
+        chmod 0755 "$tools_dir/aliyun"
+
+    - name: Publish and verify complete release bundle
+      shell: bash
+      env:
+        PUBLISH_ARTIFACT_DIRECTORY: ${{ inputs.artifact-directory }}
+        PUBLISH_MODE: ${{ inputs.mode }}
+      run: bash "$GITHUB_ACTION_PATH/publish.sh"

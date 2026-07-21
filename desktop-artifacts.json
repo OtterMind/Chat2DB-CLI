@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "edition": "community",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "5.3.0",
+      "url": "https://github.com/OtterMind/Chat2DB/releases/download/v5.3.0/Chat2DB-Community-5.3.0-arm64.dmg",
+      "size": 385522943,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "b0f6003ab2d7ed5f8334338f2871a0297bc0139208382b98792d81408dfb8fb3"
+      }
+    },
+    {
+      "edition": "community",
+      "os": "darwin",
+      "arch": "x86_64",
+      "version": "5.3.0",
+      "url": "https://github.com/OtterMind/Chat2DB/releases/download/v5.3.0/Chat2DB-Community-5.3.0-x64.dmg",
+      "size": 396246206,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "e785572a3c3c17a2ea4e8c4c301a84509088e958f323503c7b85c469b9737ccf"
+      }
+    },
+    {
+      "edition": "community",
+      "os": "windows",
+      "arch": "x86_64",
+      "version": "5.3.0",
+      "url": "https://github.com/OtterMind/Chat2DB/releases/download/v5.3.0/Chat2DB-Community-5.3.0.msi",
+      "size": 412905017,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "260e6fadcf2d9592fe0b1817b767606179e33e39dc0b083d945432688dd0b45d"
+      }
+    },
+    {
+      "edition": "pro",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "3.1.15",
+      "url": "https://cdn.chat2db-ai.com/download/latest/mac/arm64/Chat2DB-Pro-3.1.15-arm64.dmg",
+      "size": 309912314,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "wgcLxAlryqoROZAmreEhc7aJGOgHYhxpgY5An5P+QrEcxFhGCX8VizSYVCIwMfHYzpa3WpZ7nlNxJ8VhaG8tLg=="
+      }
+    },
+    {
+      "edition": "pro",
+      "os": "darwin",
+      "arch": "x86_64",
+      "version": "3.1.15",
+      "url": "https://cdn.chat2db-ai.com/download/latest/mac/x64/Chat2DB-Pro-3.1.15-x64.dmg",
+      "size": 310701598,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "+sSW9g3ck0AlwmPUhfQkPhJaFvYhliOr0VuvIWa8o8j1iqLXP7kSF+RxG8l+fjAL0FlgdfA4a8s68VRN6oGC6w=="
+      }
+    },
+    {
+      "edition": "pro",
+      "os": "windows",
+      "arch": "x86_64",
+      "version": "3.1.15",
+      "url": "https://cdn.chat2db-ai.com/download/latest/windows/Chat2DB-Pro-3.1.15.exe",
+      "size": 272540282,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "pzTjNFXW2vozlN3aUxnGeRTLBnEEBOCnvLMIPWEMuJiQYhJ+l6qWNUP6Vua7+wqv0jiIYEwyispnnUIEX9CSGw=="
+      }
+    },
+    {
+      "edition": "local",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "3.1.16",
+      "url": "https://cdn.chat2db-ai.com/offline/latest/mac/arm64/Chat2DB-Local-3.1.16-arm64.dmg",
+      "size": 310214719,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "hNH3IW8x+XxZ8ojIP8qspTlBY6aIiaq/2nhhQY8P2WKk0+YwkzSQPOvYECfhCWcW/wNuPp0U+DYneRZZ//1wug=="
+      }
+    },
+    {
+      "edition": "local",
+      "os": "darwin",
+      "arch": "x86_64",
+      "version": "3.1.16",
+      "url": "https://cdn.chat2db-ai.com/offline/latest/mac/x64/Chat2DB-Local-3.1.16-x64.dmg",
+      "size": 311035063,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "S1bm0Mq3YLF4/GdybfZ8nM4UUgqUf9GLBrrAjqUSHAtQirj3r/duPEdXA03zDudPr8xnA7veOnwU8CaxqwA/Mw=="
+      }
+    },
+    {
+      "edition": "local",
+      "os": "windows",
+      "arch": "x86_64",
+      "version": "3.1.16",
+      "url": "https://cdn.chat2db-ai.com/offline/latest/windows/Chat2DB-Local-3.1.16.exe",
+      "size": 409597647,
+      "checksum": {
+        "algorithm": "sha512",
+        "value": "QlZ37Lwx5zbkcJ6w2mRVkRK2klFVkbFYhqVXo67VyHd7eLzZ3KwGhJTPUCtTsJ2rfABkXhRxB377OF0E5JwBpA=="
+      }
+    }
+  ]
+}

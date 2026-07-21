@@ -1,0 +1,201 @@
+name: Reusable quality checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+
+jobs:
+  msrv:
+    name: Rust 1.88 compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install minimum supported Rust
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Check locked dependency graph
+        run: cargo check --locked --all-targets
+
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+      - name: Check reproducible CLI packages
+        run: bash tests/package_cli_reproducibility.sh
+
+      - name: Package CLI
+        run: bash scripts/package-cli.sh --target x86_64-unknown-linux-gnu
+
+      - name: Validate CLI release assets
+        run: |
+          python3 .github/scripts/stage-release-assets.py \
+            --product cli \
+            --input-directory dist \
+            --output-directory release-assets \
+            --cdn-base-url https://cdn.example.invalid
+
+  skill:
+    name: Skill package
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Package Skill
+        run: bash scripts/package-skill.sh
+
+      - name: Validate Skill release assets
+        run: |
+          python3 .github/scripts/stage-release-assets.py \
+            --product skill \
+            --input-directory dist \
+            --output-directory release-assets \
+            --cdn-base-url https://cdn.example.invalid
+
+  windows:
+    name: Windows runtime and installer checks
+    runs-on: windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Run Windows tests
+        run: cargo test --locked --all-targets
+
+      - name: Run Windows Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  supply-chain:
+    name: Dependency, license, and secret policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check advisories, licenses, bans, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+
+      - name: Check third-party license notices
+        run: python3 .github/scripts/check-third-party-licenses.py
+
+      - name: Install pinned Gitleaks CLI
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          tools_dir="$RUNNER_TEMP/gitleaks"
+          archive="$tools_dir/gitleaks.tar.gz"
+          rm -rf "$tools_dir"
+          mkdir -p "$tools_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 180 \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$tools_dir" gitleaks
+          chmod 0755 "$tools_dir/gitleaks"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Scan complete Git history for secrets
+        run: gitleaks git --redact --verbose --no-banner --log-opts=--all .
+
+  automation:
+    name: Workflow, documentation, and shell checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: v1.7.7
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@"$ACTIONLINT_VERSION"
+
+      - name: Validate workflows
+        run: actionlint
+
+      - name: Enforce immutable Action references
+        run: python3 .github/scripts/check-action-pins.py
+
+      - name: Validate documentation
+        run: python3 .github/scripts/check-docs.py
+
+      - name: Test CDN publication planning and rollback contract
+        run: |
+          python3 -m unittest discover \
+            --start-directory .github/actions/publish-cdn/tests \
+            --pattern 'test_*.py'
+          bash .github/actions/publish-cdn/tests/test_publish_transaction.sh
+
+      - name: Test release notification state
+        run: >-
+          python3 -m unittest discover
+          --start-directory .github/scripts/tests
+          --pattern 'test_*.py'
+
+      - name: Test local development installers
+        run: bash tests/dev_install_scripts.sh
+
+      - name: Validate shell syntax
+        run: |
+          for script in \
+            .github/actions/publish-cdn/publish.sh \
+            .github/actions/publish-cdn/tests/*.sh \
+            scripts/*.sh \
+            tests/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Check publishing shell
+        run: >-
+          shellcheck -x
+          .github/actions/publish-cdn/publish.sh
+          .github/actions/publish-cdn/tests/*.sh
+          scripts/*.sh
+          tests/*.sh

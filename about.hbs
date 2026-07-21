@@ -1,0 +1,19 @@
+Chat2DB CLI Third-Party License Notices
+
+This file contains license notices for third-party software distributed with
+Chat2DB CLI. It is generated from Cargo.lock with cargo-about. Do not edit it
+manually.
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+{{#if crate.source}}
+- {{{crate.name}}} {{{crate.version}}}
+{{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

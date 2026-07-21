@@ -1,0 +1,538 @@
+name: Release
+run-name: Chat2DB CLI ${{ inputs.mode }} v${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Publication mode
+        required: true
+        default: cdn-only
+        type: choice
+        options:
+          - cdn-only
+          - release
+      version:
+        description: Stable version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+  CHAT2DB_CDN_BASE_URL: https://cdn.chat2db-ai.com
+
+jobs:
+  resolve:
+    name: Resolve publication mode
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.metadata.outputs.mode }}
+      version: ${{ steps.metadata.outputs.version }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+    steps:
+      - name: Resolve and validate publication metadata
+        id: metadata
+        shell: bash
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_REF" != refs/heads/main ]; then
+            echo "error: releases must be dispatched from the protected main branch" >&2
+            exit 1
+          fi
+          mode="$INPUT_MODE"
+          version="$INPUT_VERSION"
+          release_tag="v$version"
+          case "$mode" in cdn-only|release) ;; *) echo "error: invalid publication mode: $mode" >&2; exit 1 ;; esac
+          if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "error: version must use stable SemVer X.Y.Z: $version" >&2
+            exit 1
+          fi
+          {
+            echo "mode=$mode"
+            echo "version=$version"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+  notify-start:
+    name: Notify Feishu publication start
+    needs:
+      - resolve
+      - validate
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    environment: release-notifications
+    permissions:
+      contents: read
+    steps:
+      - name: Check out notification script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Send Feishu start notification
+        continue-on-error: true
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_RELEASE_NOTIFY_WEBHOOK }}
+          NOTIFICATION_EVENT: start
+          RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/notify-feishu.py
+
+  quality:
+    needs: resolve
+    uses: ./.github/workflows/quality.yml
+
+  validate:
+    name: Validate stable release
+    needs:
+      - resolve
+      - quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete repository history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the protected main HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          if [ "$RELEASE_MODE" = release ]; then
+            git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+            test "$(git cat-file -t "$RELEASE_TAG")" = tag
+            tag_ref_json_file="$(mktemp)"
+            tag_json_file="$(mktemp)"
+            trap 'rm -f "$tag_ref_json_file" "$tag_json_file"' EXIT
+            gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" > "$tag_ref_json_file"
+            tag_object_type="$(jq -er '.object.type' "$tag_ref_json_file")"
+            tag_object_sha="$(jq -er '.object.sha' "$tag_ref_json_file")"
+            test "$tag_object_type" = tag
+            [[ "$tag_object_sha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]
+            test "$tag_object_sha" = "$(git rev-parse "refs/tags/$RELEASE_TAG")"
+            gh api "repos/$GH_REPO/git/tags/$tag_object_sha" > "$tag_json_file"
+            python3 .github/scripts/validate-release-tag.py \
+              --tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --local-tag-sha "$tag_object_sha" \
+              --ref-json "$tag_ref_json_file" \
+              --tag-json "$tag_json_file"
+          fi
+
+      - name: Validate version and prevent stable downgrade
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing_tags_file="$(mktemp)"
+          trap 'rm -f "$existing_tags_file"' EXIT
+          gh release list \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --limit 100 \
+            --json tagName \
+            --jq '.[].tagName' > "$existing_tags_file"
+          mapfile -t existing_tags < "$existing_tags_file"
+          python3 .github/scripts/validate-release-version.py \
+            "$RELEASE_TAG" "${existing_tags[@]}"
+
+  package-cli:
+    name: Package CLI (${{ matrix.slug }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: darwin-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - slug: darwin-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - slug: linux-x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - slug: linux-arm64
+            runner: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+          - slug: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust target
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustup target add "$RUST_TARGET"
+
+      - name: Install Linux ARM64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+
+      - name: Package CLI
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: bash scripts/package-cli.sh --target "$RUST_TARGET"
+
+      - name: Stage validated CLI assets
+        shell: bash
+        env:
+          CDN_BASE_URL: ${{ env.CHAT2DB_CDN_BASE_URL }}
+        run: |
+          python_bin=python3
+          command -v "$python_bin" >/dev/null 2>&1 || python_bin=python
+          "$python_bin" .github/scripts/stage-release-assets.py \
+            --product cli \
+            --input-directory dist \
+            --output-directory release-assets \
+            --cdn-base-url "$CDN_BASE_URL"
+
+      - name: Upload CLI assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-cli-${{ matrix.slug }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  package-skill:
+    name: Package Skill
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Package Skill
+        run: bash scripts/package-skill.sh
+
+      - name: Stage validated Skill assets
+        env:
+          CDN_BASE_URL: ${{ env.CHAT2DB_CDN_BASE_URL }}
+        run: |
+          python3 .github/scripts/stage-release-assets.py \
+            --product skill \
+            --input-directory dist \
+            --output-directory release-assets \
+            --cdn-base-url "$CDN_BASE_URL"
+
+      - name: Upload Skill assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-skill
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  sbom:
+    name: Generate CycloneDX SBOM
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Install pinned SBOM generator
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
+      - name: Generate SBOM
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          cargo cyclonedx \
+            --all \
+            --format json \
+            --override-filename chat2db-cli.cdx \
+            --spec-version 1.5 \
+            --target all
+          test -s chat2db-cli.cdx.json
+          python3 -c 'import json; data=json.load(open("chat2db-cli.cdx.json")); assert data["bomFormat"] == "CycloneDX"'
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-sbom
+          path: chat2db-cli.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble-release:
+    name: Assemble and attest release bundle
+    needs:
+      - resolve
+      - package-cli
+      - package-skill
+      - sbom
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download all staged assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Add versioned and stable installer assets
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          cp scripts/install-cli.sh "release-assets/install-cli-$version.sh"
+          cp scripts/install-cli.ps1 "release-assets/install-cli-$version.ps1"
+          cp scripts/install-skill.sh "release-assets/install-skill-$version.sh"
+          cp scripts/install-cli.sh release-assets/install-cli.sh
+          cp scripts/install-cli.ps1 release-assets/install-cli.ps1
+          cp scripts/install-skill.sh release-assets/install-skill.sh
+          cp LICENSE release-assets/LICENSE
+          cp THIRD_PARTY_LICENSES.txt release-assets/THIRD_PARTY_LICENSES.txt
+          rm -f release-assets/checksums-*.txt
+
+      - name: Generate consolidated checksums
+        working-directory: release-assets
+        run: |
+          checksum_file="$(mktemp)"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS \
+            -printf '%f\0' | sort -z | xargs -0 --no-run-if-empty sha256sum > "$checksum_file"
+          mv "$checksum_file" SHA256SUMS
+          test -s SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Attest release provenance
+        id: provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-checksums: release-assets/SHA256SUMS
+
+      - name: Add provenance bundle
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          test -s "$ATTESTATION_BUNDLE"
+          cp "$ATTESTATION_BUNDLE" "release-assets/chat2db-cli-${RELEASE_TAG#v}.intoto.jsonl"
+
+      - name: Upload canonical release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-bundle
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    name: Create draft GitHub Release
+    needs:
+      - resolve
+      - assemble-release
+    if: ${{ needs.resolve.outputs.mode == 'release' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download canonical release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bundle
+          path: release-assets
+
+      - name: Create or replace draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            gh release edit "$RELEASE_TAG" --draft --title "Chat2DB CLI $RELEASE_TAG"
+            while IFS= read -r asset_name; do
+              test -z "$asset_name" || gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes
+            done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+            gh release upload "$RELEASE_TAG" release-assets/*
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --draft \
+              --generate-notes \
+              --title "Chat2DB CLI $RELEASE_TAG" \
+              --verify-tag
+          fi
+
+  publish-cdn-only:
+    name: Publish immutable CDN objects only
+    needs:
+      - resolve
+      - assemble-release
+    if: ${{ needs.resolve.outputs.mode == 'cdn-only' }}
+    runs-on: ubuntu-24.04
+    environment: cdn-production
+    permissions:
+      contents: read
+    steps:
+      - name: Check out publishing Action
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download canonical release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bundle
+          path: release-assets
+
+      - name: Publish and verify immutable CDN objects
+        uses: ./.github/actions/publish-cdn
+        env:
+          ALIYUN_OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+          ALIYUN_OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+          ALIYUN_OSS_ENDPOINT: ${{ vars.ALIYUN_OSS_ENDPOINT }}
+          ALIYUN_OSS_BUCKET: ${{ vars.ALIYUN_OSS_BUCKET }}
+        with:
+          artifact-directory: release-assets
+          mode: cdn-only
+
+  publish-full-release:
+    name: Publish CDN and GitHub Release transaction
+    needs:
+      - resolve
+      - draft-release
+    if: ${{ needs.resolve.outputs.mode == 'release' }}
+    runs-on: ubuntu-24.04
+    environment: cdn-production
+    permissions:
+      contents: write
+    steps:
+      - name: Check out publishing Action
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download canonical release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bundle
+          path: release-assets
+
+      - name: Publish and verify complete release
+        uses: ./.github/actions/publish-cdn
+        env:
+          ALIYUN_OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+          ALIYUN_OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+          ALIYUN_OSS_ENDPOINT: ${{ vars.ALIYUN_OSS_ENDPOINT }}
+          ALIYUN_OSS_BUCKET: ${{ vars.ALIYUN_OSS_BUCKET }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        with:
+          artifact-directory: release-assets
+          mode: release
+
+  notify-summary:
+    name: Notify Feishu publication summary
+    needs:
+      - resolve
+      - quality
+      - validate
+      - package-cli
+      - package-skill
+      - sbom
+      - assemble-release
+      - draft-release
+      - publish-cdn-only
+      - publish-full-release
+    if: ${{ always() && needs.validate.result == 'success' }}
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    environment: release-notifications
+    permissions:
+      contents: read
+    steps:
+      - name: Check out notification script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Send Feishu summary notification
+        continue-on-error: true
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_RELEASE_NOTIFY_WEBHOOK }}
+          NOTIFICATION_EVENT: summary
+          RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT_RESOLVE: ${{ needs.resolve.result }}
+          RESULT_QUALITY: ${{ needs.quality.result }}
+          RESULT_VALIDATE: ${{ needs.validate.result }}
+          RESULT_PACKAGE_CLI: ${{ needs.package-cli.result }}
+          RESULT_PACKAGE_SKILL: ${{ needs.package-skill.result }}
+          RESULT_SBOM: ${{ needs.sbom.result }}
+          RESULT_ASSEMBLE_RELEASE: ${{ needs.assemble-release.result }}
+          RESULT_DRAFT_RELEASE: ${{ needs.draft-release.result }}
+          RESULT_PUBLISH_CDN_ONLY: ${{ needs.publish-cdn-only.result }}
+          RESULT_PUBLISH_FULL_RELEASE: ${{ needs.publish-full-release.result }}
+        run: python3 .github/scripts/notify-feishu.py

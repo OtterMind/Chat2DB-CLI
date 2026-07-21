@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # GitHub's standard Intel macOS label is newer than actionlint 1.7.7's list.
+  labels:
+    - macos-15-intel

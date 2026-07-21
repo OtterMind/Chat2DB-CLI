@@ -155,7 +155,11 @@ jobs:
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: v1.7.7
-        run: go install github.com/rhysd/actionlint/cmd/actionlint@"$ACTIONLINT_VERSION"
+        run: |
+          actionlint_dir="$RUNNER_TEMP/actionlint"
+          mkdir -p "$actionlint_dir"
+          GOBIN="$actionlint_dir" go install github.com/rhysd/actionlint/cmd/actionlint@"$ACTIONLINT_VERSION"
+          echo "$actionlint_dir" >> "$GITHUB_PATH"
 
       - name: Validate workflows
         run: actionlint

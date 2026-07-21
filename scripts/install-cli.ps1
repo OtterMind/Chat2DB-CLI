@@ -104,6 +104,23 @@ function Assert-CanonicalExactUrl {
   }
 }
 
+function Get-FileSha256 {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = $sha256.ComputeHash($stream)
+      return ([System.BitConverter]::ToString($hash)).Replace("-", "").ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
   $Version = "latest"
 }
@@ -164,7 +181,7 @@ try {
 
   $archivePath = Join-Path $stage $archiveName
   Invoke-WebRequest -Uri $artifactUrl -OutFile $archivePath -UseBasicParsing -MaximumRedirection 5
-  $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+  $actualSha256 = Get-FileSha256 -Path $archivePath
   if ($actualSha256 -cne $expectedSha256) {
     throw "checksum mismatch: expected $expectedSha256, got $actualSha256"
   }

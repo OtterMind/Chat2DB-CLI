@@ -66,6 +66,14 @@ fn windows_install_script_supports_force_and_no_modify_path() {
 }
 
 #[test]
+fn windows_install_script_hashes_without_optional_cmdlets() {
+    let script = windows_install_script();
+
+    assert!(script.contains("[System.Security.Cryptography.SHA256]::Create()"));
+    assert!(!script.contains("Get-FileHash"));
+}
+
+#[test]
 fn installers_default_to_github_release_manifests() {
     let unix = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/install-cli.sh"),

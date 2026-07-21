@@ -27,7 +27,7 @@ use crate::http::{DownloadProgress, HttpClient};
 use crate::manifest::{
     OFFICIAL_SKILL_BUNDLE_PATH, SkillManifest, sha256_hex, skill_manifest_url, verify_sha256,
 };
-use crate::platform::{ExclusiveLock, acquire_exclusive_lock, write_private_atomic};
+use crate::platform::{ExclusiveLock, acquire_exclusive_lock, sync_file, write_private_atomic};
 
 /// Canonical release bundle and on-disk directory name.
 pub const SKILL_DIR_NAME: &str = OFFICIAL_SKILL_BUNDLE_PATH;
@@ -878,7 +878,7 @@ fn sync_skill_bundle(path: &Path) -> Result<()> {
         });
     }
     if metadata.is_file() {
-        File::open(path)?.sync_all()?;
+        sync_file(path)?;
         return Ok(());
     }
     if !metadata.is_dir() {

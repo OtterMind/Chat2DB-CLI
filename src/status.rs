@@ -11,7 +11,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::app_plist::read_app_bundle_metadata;
 use crate::background::{BackgroundState, log_path_in, read_state_in};
 use crate::edition::{Edition, EditionSelector};
-use crate::installer::{SystemPaths, verify_app_bundle};
+use crate::installer::{AppVerifier, SystemPaths, verify_app_bundle};
 use crate::mcp::{
     EndpointState, McpEditionStatus, McpEndpointProbe, McpStatusRequest, TcpEndpointProbe,
     mcp_status_with,
@@ -558,10 +558,28 @@ where
     P: ProcessProbe + ?Sized,
     E: McpEndpointProbe + ?Sized,
 {
+    check_status_with_probes_and_verifier(request, process_probe, endpoint_probe, verify_app_bundle)
+}
+
+fn check_status_with_probes_and_verifier<P, E>(
+    request: StatusRequest,
+    process_probe: &P,
+    endpoint_probe: &E,
+    app_verifier: AppVerifier,
+) -> StatusOutcome
+where
+    P: ProcessProbe + ?Sized,
+    E: McpEndpointProbe + ?Sized,
+{
     let editions = Edition::ALL
         .into_iter()
         .map(|edition| {
-            check_edition_status_with_process_probe(edition, &request.paths, process_probe)
+            check_edition_status_with_process_probe_and_verifier(
+                edition,
+                &request.paths,
+                process_probe,
+                app_verifier,
+            )
         })
         .collect::<Vec<_>>();
     let mcp = aggregate_mcp_status(&request.paths, process_probe, endpoint_probe);
@@ -737,8 +755,25 @@ pub fn check_edition_status_with_process_probe<P: ProcessProbe + ?Sized>(
     paths: &SystemPaths,
     probe: &P,
 ) -> EditionStatus {
+    check_edition_status_with_process_probe_and_verifier(edition, paths, probe, verify_app_bundle)
+}
+
+pub(crate) fn check_edition_status_with_verifier(
+    edition: Edition,
+    paths: &SystemPaths,
+    app_verifier: AppVerifier,
+) -> EditionStatus {
+    check_edition_status_with_process_probe_and_verifier(edition, paths, &PgrepProbe, app_verifier)
+}
+
+fn check_edition_status_with_process_probe_and_verifier<P: ProcessProbe + ?Sized>(
+    edition: Edition,
+    paths: &SystemPaths,
+    probe: &P,
+    app_verifier: AppVerifier,
+) -> EditionStatus {
     let app_path = edition.app_path(&paths.applications_dir);
-    let app = bundle_metadata(&app_path, edition);
+    let app = bundle_metadata(&app_path, edition, app_verifier);
     let installed = app.install_state == InstallState::Installed;
     let install_state = app.install_state;
     let install_error = app.error.clone();
@@ -848,7 +883,7 @@ fn detect_login_status(
     }
 }
 
-fn bundle_metadata(app_path: &Path, edition: Edition) -> AppReport {
+fn bundle_metadata(app_path: &Path, edition: Edition, app_verifier: AppVerifier) -> AppReport {
     if !app_path.exists() {
         return AppReport {
             path: app_path.to_path_buf(),
@@ -862,7 +897,7 @@ fn bundle_metadata(app_path: &Path, edition: Edition) -> AppReport {
     }
 
     if app_path.extension().and_then(|ext| ext.to_str()) == Some("exe") {
-        return windows_app_metadata(app_path, edition);
+        return windows_app_metadata(app_path, edition, app_verifier);
     }
 
     let info_plist = app_path.join("Contents/Info.plist");
@@ -871,7 +906,7 @@ fn bundle_metadata(app_path: &Path, edition: Edition) -> AppReport {
         .map(|metadata| (metadata.bundle_id, metadata.version, metadata.executable))
         .unwrap_or((None, None, None));
 
-    match verify_app_bundle(app_path, edition) {
+    match app_verifier(app_path, edition) {
         Ok(()) => AppReport {
             path: app_path.to_path_buf(),
             expected_bundle_id: edition.bundle_id(),
@@ -893,8 +928,8 @@ fn bundle_metadata(app_path: &Path, edition: Edition) -> AppReport {
     }
 }
 
-fn windows_app_metadata(app_path: &Path, edition: Edition) -> AppReport {
-    match verify_app_bundle(app_path, edition) {
+fn windows_app_metadata(app_path: &Path, edition: Edition, app_verifier: AppVerifier) -> AppReport {
+    match app_verifier(app_path, edition) {
         Ok(()) => AppReport {
             path: app_path.to_path_buf(),
             expected_bundle_id: edition.bundle_id(),
@@ -1100,6 +1135,9 @@ mod tests {
     use super::*;
     use crate::mcp::McpEndpointProbe;
     use crate::process::ProcessProbe;
+    use crate::test_support::{
+        create_installed_app, create_invalid_app, test_paths, verify_app_fixture,
+    };
 
     #[derive(Debug, Clone)]
     struct FakeProcessProbe {
@@ -1131,15 +1169,12 @@ mod tests {
     fn status_reports_community_first_without_authentication() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Community.app"),
-            "com.chat2db.community",
-        );
+        create_installed_app(&paths, Edition::Community);
         let cookie_file = login_cookie_file_path(Edition::Community, &paths.home_dir);
         fs::create_dir_all(cookie_file.parent().unwrap()).unwrap();
         fs::write(&cookie_file, b"not valid json and must not be read").unwrap();
 
-        let outcome = check_status_with_process_probe(
+        let outcome = check_status_with_fixture_process_probe(
             StatusRequest {
                 paths: paths.clone(),
             },
@@ -1181,15 +1216,13 @@ mod tests {
     fn status_summary_splits_app_cli_runtime_and_mcp() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.chat2db.pro",
-        );
+        create_installed_app(&paths, Edition::Pro);
         let probe = FakeProcessProbe::running();
 
         let endpoint_probe = FakeEndpointProbe(EndpointState::NotListening);
 
-        let outcome = check_status_with_probes(StatusRequest { paths }, &probe, &endpoint_probe);
+        let outcome =
+            check_status_with_fixture_probes(StatusRequest { paths }, &probe, &endpoint_probe);
         let pro = outcome.summary.for_edition(Edition::Pro);
 
         assert_eq!(pro.app.state, StatusAppState::Running);
@@ -1231,12 +1264,9 @@ mod tests {
     fn status_reports_installed_verified_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.chat2db.pro",
-        );
+        create_installed_app(&paths, Edition::Pro);
 
-        let outcome = check_status(StatusRequest {
+        let outcome = check_status_with_fixture(StatusRequest {
             paths: paths.clone(),
         });
         let pro = find_edition(&outcome, Edition::Pro);
@@ -1246,49 +1276,64 @@ mod tests {
         assert!(pro.install_error.is_none());
         assert_eq!(pro.summary, StatusSummary::Stopped);
         assert_eq!(pro.next_action, Some(NextAction::Start));
-        assert_eq!(pro.app.bundle_id.as_deref(), Some("com.chat2db.pro"));
-        assert_eq!(pro.app.version.as_deref(), Some("1.2.3"));
-        assert_eq!(pro.app.executable.as_deref(), Some("Chat2DB"));
+        #[cfg(not(windows))]
+        {
+            assert_eq!(pro.app.bundle_id.as_deref(), Some("com.chat2db.pro"));
+            assert_eq!(pro.app.version.as_deref(), Some("1.2.3"));
+            assert_eq!(pro.app.executable.as_deref(), Some("Chat2DB"));
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(pro.app.bundle_id, None);
+            assert_eq!(pro.app.version, None);
+            assert_eq!(pro.app.executable.as_deref(), Some("Chat2DB Pro.exe"));
+        }
     }
 
     #[test]
     fn status_reports_invalid_app_without_failing() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Local.app"),
-            "com.example.other",
-        );
+        create_invalid_app(&paths, Edition::Local);
 
-        let outcome = check_status(StatusRequest {
+        let outcome = check_status_with_fixture(StatusRequest {
             paths: paths.clone(),
         });
         let local = find_edition(&outcome, Edition::Local);
 
         assert!(!local.installed);
         assert_eq!(local.install_state, InstallState::Invalid);
+        assert!(local.install_error.is_some());
+        #[cfg(not(windows))]
         assert!(
             local
                 .install_error
                 .as_ref()
                 .is_some_and(|error| error.contains("bundle id mismatch"))
         );
+        #[cfg(windows)]
+        assert!(
+            local
+                .install_error
+                .as_ref()
+                .is_some_and(|error| error.contains("not installed"))
+        );
         assert_eq!(local.summary, StatusSummary::InvalidApp);
         assert_eq!(local.next_action, Some(NextAction::InspectInvalidApp));
+        #[cfg(not(windows))]
         assert_eq!(local.app.bundle_id.as_deref(), Some("com.example.other"));
+        #[cfg(windows)]
+        assert_eq!(local.app.bundle_id, None);
     }
 
     #[test]
     fn status_reports_running_process_pids() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.chat2db.pro",
-        );
+        create_installed_app(&paths, Edition::Pro);
         let probe = FakeProcessProbe::running();
 
-        let outcome = check_status_with_process_probe(StatusRequest { paths }, &probe);
+        let outcome = check_status_with_fixture_process_probe(StatusRequest { paths }, &probe);
         let pro = find_edition(&outcome, Edition::Pro);
 
         assert_eq!(pro.process.state, ProcessState::Running);
@@ -1299,16 +1344,13 @@ mod tests {
     fn status_summarizes_ready_when_running_and_logged_in() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Local.app"),
-            "com.chat2db.local",
-        );
+        create_installed_app(&paths, Edition::Local);
         let cookie_file = login_cookie_file_path(Edition::Local, &paths.home_dir);
         fs::create_dir_all(cookie_file.parent().unwrap()).unwrap();
         fs::write(&cookie_file, r#"{"Chat2db-BS-TOKEN":{"value":"MTIz"}}"#).unwrap();
         let probe = FakeProcessProbe::running();
 
-        let outcome = check_status_with_process_probe(StatusRequest { paths }, &probe);
+        let outcome = check_status_with_fixture_process_probe(StatusRequest { paths }, &probe);
         let local = find_edition(&outcome, Edition::Local);
 
         assert_eq!(local.summary, StatusSummary::Ready);
@@ -1319,14 +1361,11 @@ mod tests {
     fn status_summarizes_needs_login_when_cookie_missing_but_data_dir_exists() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.chat2db.pro",
-        );
+        create_installed_app(&paths, Edition::Pro);
         fs::create_dir_all(chat2db_base_path(Edition::Pro, &paths.home_dir)).unwrap();
         let probe = FakeProcessProbe { pids: vec![] };
 
-        let outcome = check_status_with_process_probe(StatusRequest { paths }, &probe);
+        let outcome = check_status_with_fixture_process_probe(StatusRequest { paths }, &probe);
         let pro = find_edition(&outcome, Edition::Pro);
 
         assert_eq!(pro.login.state, LoginState::NotLoggedIn);
@@ -1686,39 +1725,31 @@ mod tests {
             .unwrap()
     }
 
-    fn test_paths(root: &Path) -> SystemPaths {
-        let applications_dir = root.join("Applications");
-        let home_dir = root.join("home");
-        fs::create_dir_all(&applications_dir).unwrap();
-        fs::create_dir_all(&home_dir).unwrap();
-        SystemPaths {
-            applications_dir,
-            home_dir,
-            background_state_dir: root.join("state"),
-        }
+    fn check_status_with_fixture(request: StatusRequest) -> StatusOutcome {
+        check_status_with_fixture_process_probe(request, &PgrepProbe)
     }
 
-    fn create_fake_app(app_path: &Path, bundle_id: &str) {
-        let contents = app_path.join("Contents");
-        fs::create_dir_all(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), plist_xml(bundle_id)).unwrap();
+    fn check_status_with_fixture_process_probe<P: ProcessProbe + ?Sized>(
+        request: StatusRequest,
+        process_probe: &P,
+    ) -> StatusOutcome {
+        check_status_with_fixture_probes(request, process_probe, &TcpEndpointProbe)
     }
 
-    fn plist_xml(bundle_id: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key>
-  <string>{bundle_id}</string>
-  <key>CFBundleShortVersionString</key>
-  <string>1.2.3</string>
-  <key>CFBundleExecutable</key>
-  <string>Chat2DB</string>
-</dict>
-</plist>
-"#
+    fn check_status_with_fixture_probes<P, E>(
+        request: StatusRequest,
+        process_probe: &P,
+        endpoint_probe: &E,
+    ) -> StatusOutcome
+    where
+        P: ProcessProbe + ?Sized,
+        E: McpEndpointProbe + ?Sized,
+    {
+        check_status_with_probes_and_verifier(
+            request,
+            process_probe,
+            endpoint_probe,
+            verify_app_fixture,
         )
     }
 }

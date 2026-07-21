@@ -26,6 +26,8 @@ pub struct SystemPaths {
     pub background_state_dir: PathBuf,
 }
 
+pub(crate) type AppVerifier = fn(&Path, Edition) -> Result<()>;
+
 impl SystemPaths {
     pub fn production() -> Self {
         let home_dir = home_dir();

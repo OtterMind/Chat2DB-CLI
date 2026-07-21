@@ -2,6 +2,22 @@ use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::Value;
+use std::path::Path;
+
+fn isolated_command(home: &Path) -> Command {
+    let local_app_data = home.join("AppData").join("Local");
+    let xdg_state_home = home.join(".local").join("state");
+    std::fs::create_dir_all(&local_app_data).unwrap();
+    std::fs::create_dir_all(&xdg_state_home).unwrap();
+
+    let mut command = Command::cargo_bin("chat2db").unwrap();
+    command
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("LOCALAPPDATA", local_app_data)
+        .env("XDG_STATE_HOME", xdg_state_home);
+    command
+}
 
 #[test]
 fn version_command_prints_package_version() {
@@ -163,6 +179,24 @@ fn db_connection_test_rejects_unsupported_host_mode_db_type() {
         .stderr(contains("pass --url instead"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn db_connection_test_with_valid_args_rejects_unsupported_platform() {
+    let mut command = Command::cargo_bin("chat2db").unwrap();
+
+    command
+        .args([
+            "db",
+            "connection-test",
+            "--data-source-id",
+            "195652",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("unsupported_platform"));
+}
+
 #[test]
 fn update_help_uses_cdn_and_has_no_source_dir() {
     let mut command = Command::cargo_bin("chat2db").unwrap();
@@ -206,10 +240,8 @@ fn status_json_reports_runtime_summary_for_agents() {
     )
     .unwrap();
 
-    let output = Command::cargo_bin("chat2db")
-        .unwrap()
+    let output = isolated_command(&home)
         .args(["status", "--json"])
-        .env("HOME", &home)
         .output()
         .unwrap();
 
@@ -259,10 +291,8 @@ compatible-cli-versions: ">=0.1, <1"
     )
     .unwrap();
 
-    let output = Command::cargo_bin("chat2db")
-        .unwrap()
+    let output = isolated_command(&home)
         .args(["status", "--json"])
-        .env("HOME", &home)
         .current_dir(&current)
         .output()
         .unwrap();
@@ -296,10 +326,8 @@ fn mcp_status_json_reports_both_editions_by_default() {
     )
     .unwrap();
 
-    let output = Command::cargo_bin("chat2db")
-        .unwrap()
+    let output = isolated_command(&home)
         .args(["mcp", "status", "--json"])
-        .env("HOME", &home)
         .output()
         .unwrap();
 
@@ -365,11 +393,10 @@ fn mcp_call_requires_valid_args_json_before_network() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let mut command = Command::cargo_bin("chat2db").unwrap();
+    let mut command = isolated_command(&home);
 
     command
         .args(["mcp", "call", "execute_sql", "--args-json", "[]", "--json"])
-        .env("HOME", &home)
         .assert()
         .failure()
         .stderr(contains(r#""code":"mcp_args_invalid_json""#));
@@ -400,8 +427,7 @@ fn dry_run_reports_paths_risk_and_next_action_without_writing() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
 
-    let output = Command::cargo_bin("chat2db")
-        .unwrap()
+    let output = isolated_command(&home)
         .args([
             "skill",
             "install",
@@ -411,7 +437,6 @@ fn dry_run_reports_paths_risk_and_next_action_without_writing() {
             "--dry-run",
             "--json",
         ])
-        .env("HOME", &home)
         .output()
         .unwrap();
 
@@ -442,8 +467,7 @@ fn mcp_call_dry_run_reports_tool_args_and_risk_without_token() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
 
-    let output = Command::cargo_bin("chat2db")
-        .unwrap()
+    let output = isolated_command(&home)
         .args([
             "mcp",
             "call",
@@ -453,7 +477,6 @@ fn mcp_call_dry_run_reports_tool_args_and_risk_without_token() {
             "--dry-run",
             "--json",
         ])
-        .env("HOME", &home)
         .output()
         .unwrap();
 

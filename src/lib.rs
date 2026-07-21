@@ -32,4 +32,7 @@ pub mod stop;
 pub mod stop_all;
 pub mod update_check;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use error::{Chat2DbError, Result};

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::edition::Edition;
 use crate::error::{Chat2DbError, Result};
-use crate::installer::{SystemPaths, verify_app_bundle};
+use crate::installer::{AppVerifier, SystemPaths, verify_app_bundle};
 use crate::platform::{HostOs, current_os};
 use crate::process::{PgrepProbe, ProcessProbe};
 use crate::runtime::acquire_edition_lifecycle_lock;
@@ -123,14 +123,32 @@ pub fn stop_with<P: ProcessProbe, Q: AppQuitter>(
     probe: P,
     quitter: Q,
 ) -> Result<StopOutcome> {
+    stop_with_and_verifier(request, probe, quitter, verify_app_bundle)
+}
+
+fn stop_with_and_verifier<P: ProcessProbe, Q: AppQuitter>(
+    request: StopRequest,
+    probe: P,
+    quitter: Q,
+    app_verifier: AppVerifier,
+) -> Result<StopOutcome> {
     let _lock = acquire_edition_lifecycle_lock(&request.paths, request.edition)?;
-    stop_with_locked(request, probe, quitter)
+    stop_with_locked_and_verifier(request, probe, quitter, app_verifier)
 }
 
 pub(crate) fn stop_with_locked<P: ProcessProbe, Q: AppQuitter>(
     request: StopRequest,
     probe: P,
     quitter: Q,
+) -> Result<StopOutcome> {
+    stop_with_locked_and_verifier(request, probe, quitter, verify_app_bundle)
+}
+
+pub(crate) fn stop_with_locked_and_verifier<P: ProcessProbe, Q: AppQuitter>(
+    request: StopRequest,
+    probe: P,
+    quitter: Q,
+    app_verifier: AppVerifier,
 ) -> Result<StopOutcome> {
     let app_path = request.edition.app_path(&request.paths.applications_dir);
     if !app_path.exists() {
@@ -140,7 +158,7 @@ pub(crate) fn stop_with_locked<P: ProcessProbe, Q: AppQuitter>(
         });
     }
 
-    verify_app_bundle(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
+    app_verifier(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
         path: app_path.clone(),
         reason: error.to_string(),
     })?;
@@ -170,10 +188,12 @@ pub(crate) fn stop_with_locked<P: ProcessProbe, Q: AppQuitter>(
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::fs;
     use std::path::Path;
 
     use super::*;
+    use crate::test_support::{
+        create_installed_app, create_invalid_app, test_paths, verify_app_fixture,
+    };
 
     #[derive(Debug)]
     struct FakeProbe {
@@ -217,20 +237,18 @@ mod tests {
     fn already_stopped_when_process_absent_does_not_call_quitter() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.chat2db.pro",
-        );
+        create_installed_app(&paths, Edition::Pro);
         let probe = FakeProbe::new(false);
         let quitter = FakeQuitter::default();
 
-        let outcome = stop_with(
+        let outcome = stop_with_and_verifier(
             StopRequest {
                 edition: Edition::Pro,
                 paths,
             },
             &probe,
             &quitter,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -243,20 +261,18 @@ mod tests {
     fn stops_running_app_with_apple_script() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Local.app"),
-            "com.chat2db.local",
-        );
+        create_installed_app(&paths, Edition::Local);
         let probe = FakeProbe::new(true);
         let quitter = FakeQuitter::default();
 
-        let outcome = stop_with(
+        let outcome = stop_with_and_verifier(
             StopRequest {
                 edition: Edition::Local,
                 paths,
             },
             &probe,
             &quitter,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -272,13 +288,14 @@ mod tests {
         let probe = FakeProbe::new(true);
         let quitter = FakeQuitter::default();
 
-        let error = stop_with(
+        let error = stop_with_and_verifier(
             StopRequest {
                 edition: Edition::Pro,
                 paths,
             },
             &probe,
             &quitter,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -291,57 +308,23 @@ mod tests {
     fn refuses_invalid_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.example.other",
-        );
+        create_invalid_app(&paths, Edition::Pro);
         let probe = FakeProbe::new(true);
         let quitter = FakeQuitter::default();
 
-        let error = stop_with(
+        let error = stop_with_and_verifier(
             StopRequest {
                 edition: Edition::Pro,
                 paths,
             },
             &probe,
             &quitter,
+            verify_app_fixture,
         )
         .unwrap_err();
 
         assert!(matches!(error, Chat2DbError::UnsafeOpen { .. }));
         assert_eq!(probe.calls.get(), 0);
         assert!(quitter.quit_calls.borrow().is_empty());
-    }
-
-    fn test_paths(root: &Path) -> SystemPaths {
-        let applications_dir = root.join("Applications");
-        let home_dir = root.join("home");
-        fs::create_dir_all(&applications_dir).unwrap();
-        fs::create_dir_all(&home_dir).unwrap();
-        SystemPaths {
-            applications_dir,
-            home_dir,
-            background_state_dir: root.join("state"),
-        }
-    }
-
-    fn create_fake_app(app_path: &Path, bundle_id: &str) {
-        let contents = app_path.join("Contents");
-        fs::create_dir_all(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), plist_xml(bundle_id)).unwrap();
-    }
-
-    fn plist_xml(bundle_id: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key>
-  <string>{bundle_id}</string>
-</dict>
-</plist>
-"#
-        )
     }
 }

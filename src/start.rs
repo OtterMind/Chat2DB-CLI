@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::edition::Edition;
 use crate::error::{Chat2DbError, Result};
-use crate::installer::{SystemPaths, verify_app_bundle};
+use crate::installer::{AppVerifier, SystemPaths, verify_app_bundle};
 use crate::login::AppOpener;
 use crate::platform::{HostOs, current_os, spawn_detached_child};
 use crate::runtime::acquire_edition_lifecycle_lock;
@@ -108,13 +108,29 @@ pub fn start(request: StartRequest) -> Result<StartOutcome> {
 }
 
 pub fn start_with_opener<O: AppOpener>(request: StartRequest, opener: O) -> Result<StartOutcome> {
+    start_with_opener_and_verifier(request, opener, verify_app_bundle)
+}
+
+fn start_with_opener_and_verifier<O: AppOpener>(
+    request: StartRequest,
+    opener: O,
+    app_verifier: AppVerifier,
+) -> Result<StartOutcome> {
     let _lock = acquire_edition_lifecycle_lock(&request.paths, request.edition)?;
-    start_with_opener_locked(request, opener)
+    start_with_opener_locked_and_verifier(request, opener, app_verifier)
 }
 
 pub(crate) fn start_with_opener_locked<O: AppOpener>(
     request: StartRequest,
     opener: O,
+) -> Result<StartOutcome> {
+    start_with_opener_locked_and_verifier(request, opener, verify_app_bundle)
+}
+
+pub(crate) fn start_with_opener_locked_and_verifier<O: AppOpener>(
+    request: StartRequest,
+    opener: O,
+    app_verifier: AppVerifier,
 ) -> Result<StartOutcome> {
     let app_path = request.edition.app_path(&request.paths.applications_dir);
     if !app_path.exists() {
@@ -124,7 +140,7 @@ pub(crate) fn start_with_opener_locked<O: AppOpener>(
         });
     }
 
-    verify_app_bundle(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
+    app_verifier(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
         path: app_path.clone(),
         reason: error.to_string(),
     })?;
@@ -142,12 +158,14 @@ pub(crate) fn start_with_opener_locked<O: AppOpener>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::fs;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
     use super::*;
+    use crate::test_support::{
+        create_installed_app, create_invalid_app, test_paths, verify_app_fixture,
+    };
 
     #[derive(Debug, Default)]
     struct FakeOpener {
@@ -165,16 +183,16 @@ mod tests {
     fn opens_verified_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        let app_path = create_installed_app(&paths, Edition::Pro);
         let opener = FakeOpener::default();
 
-        let outcome = start_with_opener(
+        let outcome = start_with_opener_and_verifier(
             StartRequest {
                 edition: Edition::Pro,
                 paths,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -191,12 +209,13 @@ mod tests {
         let paths = test_paths(temp.path());
         let opener = FakeOpener::default();
 
-        let error = start_with_opener(
+        let error = start_with_opener_and_verifier(
             StartRequest {
                 edition: Edition::Local,
                 paths,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -208,18 +227,16 @@ mod tests {
     fn refuses_invalid_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.example.other",
-        );
+        create_invalid_app(&paths, Edition::Pro);
         let opener = FakeOpener::default();
 
-        let error = start_with_opener(
+        let error = start_with_opener_and_verifier(
             StartRequest {
                 edition: Edition::Pro,
                 paths,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -231,20 +248,20 @@ mod tests {
     fn start_waits_for_the_shared_edition_lifecycle_lock() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, Edition::Pro.bundle_id());
+        create_installed_app(&paths, Edition::Pro);
         let held_lock = acquire_edition_lifecycle_lock(&paths, Edition::Pro).unwrap();
         let (result_tx, result_rx) = mpsc::channel();
 
         let handle = thread::spawn(move || {
             let opener = FakeOpener::default();
             result_tx
-                .send(start_with_opener(
+                .send(start_with_opener_and_verifier(
                     StartRequest {
                         edition: Edition::Pro,
                         paths,
                     },
                     &opener,
+                    verify_app_fixture,
                 ))
                 .unwrap();
         });
@@ -260,37 +277,5 @@ mod tests {
             "opened"
         );
         handle.join().unwrap();
-    }
-
-    fn test_paths(root: &Path) -> SystemPaths {
-        let applications_dir = root.join("Applications");
-        let home_dir = root.join("home");
-        fs::create_dir_all(&applications_dir).unwrap();
-        fs::create_dir_all(&home_dir).unwrap();
-        SystemPaths {
-            applications_dir,
-            home_dir,
-            background_state_dir: root.join("state"),
-        }
-    }
-
-    fn create_fake_app(app_path: &Path, bundle_id: &str) {
-        let contents = app_path.join("Contents");
-        fs::create_dir_all(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), plist_xml(bundle_id)).unwrap();
-    }
-
-    fn plist_xml(bundle_id: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key>
-  <string>{bundle_id}</string>
-</dict>
-</plist>
-"#
-        )
     }
 }

@@ -312,10 +312,7 @@ fn run(cli: Cli) -> Result<Vec<Outcome>> {
                     .map(|outcome| vec![Outcome::Runtime(outcome)]),
             }
         }
-        Command::Db(args) => {
-            ensure_desktop_supported()?;
-            run_db_op(args.op)
-        }
+        Command::Db(args) => run_db_op(args.op),
         Command::Sql(args) => {
             ensure_desktop_supported()?;
             match args.op {

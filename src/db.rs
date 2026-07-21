@@ -5,6 +5,7 @@ use crate::direct::{
 };
 use crate::error::{Chat2DbError, Result};
 use crate::output::Outcome;
+use crate::platform::ensure_desktop_supported;
 use crate::runtime_client::{
     DatasourceConnectionTestRequest, DatasourceCreateRequest, DatasourceUpdateRequest,
 };
@@ -42,6 +43,18 @@ const CONNECTION_TEST_HOST_MODE_DB_TYPES: &[&str] = &[
 ];
 
 pub fn run_db_op(op: DbOp) -> Result<Vec<Outcome>> {
+    let op = match op {
+        DbOp::ConnectionTest(a) => {
+            let edition = a.edition;
+            let request = connection_test_request(a)?;
+            ensure_desktop_supported()?;
+            return connection_test(DirectRequest::production(edition), request)
+                .map(|outcome| vec![Outcome::Direct(outcome)]);
+        }
+        op => op,
+    };
+    ensure_desktop_supported()?;
+
     match op {
         DbOp::Datasources(a) => list_datasources(
             DirectRequest::production(a.edition),
@@ -54,14 +67,7 @@ pub fn run_db_op(op: DbOp) -> Result<Vec<Outcome>> {
             get_datasource(DirectRequest::production(a.edition), a.data_source_id)
                 .map(|outcome| vec![Outcome::Direct(outcome)])
         }
-        DbOp::ConnectionTest(a) => {
-            let edition = a.edition;
-            connection_test(
-                DirectRequest::production(edition),
-                connection_test_request(a)?,
-            )
-            .map(|outcome| vec![Outcome::Direct(outcome)])
-        }
+        DbOp::ConnectionTest(_) => unreachable!("connection-test is handled before execution"),
         DbOp::DatasourceCreate(a) => create_datasource(
             DirectRequest::production(a.edition),
             datasource_create_request(a)?,

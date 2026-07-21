@@ -7,10 +7,10 @@ use serde::Serialize;
 
 use crate::edition::Edition;
 use crate::error::{Chat2DbError, Result};
-use crate::installer::{SystemPaths, verify_app_bundle};
+use crate::installer::{AppVerifier, SystemPaths, verify_app_bundle};
 use crate::platform::{HostOs, current_os, spawn_detached_child};
 use crate::runtime::acquire_edition_lifecycle_lock;
-use crate::status::{LoginState, check_edition_status};
+use crate::status::{LoginState, check_edition_status_with_verifier};
 
 #[derive(Debug, Clone)]
 pub struct LoginRequest {
@@ -79,6 +79,14 @@ pub fn login(request: LoginRequest) -> Result<LoginOutcome> {
 }
 
 pub fn login_with_opener<O: AppOpener>(request: LoginRequest, opener: O) -> Result<LoginOutcome> {
+    login_with_opener_and_verifier(request, opener, verify_app_bundle)
+}
+
+fn login_with_opener_and_verifier<O: AppOpener>(
+    request: LoginRequest,
+    opener: O,
+    app_verifier: AppVerifier,
+) -> Result<LoginOutcome> {
     let app_path = request.edition.app_path(&request.paths.applications_dir);
     if !request.edition.requires_login() {
         return Ok(LoginOutcome {
@@ -100,12 +108,13 @@ pub fn login_with_opener<O: AppOpener>(request: LoginRequest, opener: O) -> Resu
         });
     }
 
-    verify_app_bundle(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
+    app_verifier(&app_path, request.edition).map_err(|error| Chat2DbError::UnsafeOpen {
         path: app_path.clone(),
         reason: error.to_string(),
     })?;
 
-    let initial_status = check_edition_status(request.edition, &request.paths);
+    let initial_status =
+        check_edition_status_with_verifier(request.edition, &request.paths, app_verifier);
     if initial_status.login.state == LoginState::LoggedIn {
         return Ok(LoginOutcome {
             command: "login",
@@ -136,7 +145,8 @@ pub fn login_with_opener<O: AppOpener>(request: LoginRequest, opener: O) -> Resu
     };
 
     loop {
-        let status = check_edition_status(request.edition, &request.paths);
+        let status =
+            check_edition_status_with_verifier(request.edition, &request.paths, app_verifier);
         if status.login.state == LoginState::LoggedIn {
             return Ok(LoginOutcome {
                 command: "login",
@@ -172,6 +182,9 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::test_support::{
+        create_installed_app, create_invalid_app, test_paths, verify_app_fixture,
+    };
 
     #[derive(Debug, Default)]
     struct FakeOpener {
@@ -203,7 +216,7 @@ mod tests {
     fn community_login_is_not_applicable_without_opening_or_requiring_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let expected_app_path = paths.applications_dir.join("Chat2DB Community.app");
+        let expected_app_path = Edition::Community.app_path(&paths.applications_dir);
         let opener = FakeOpener::default();
 
         let outcome = login_with_opener(
@@ -229,12 +242,11 @@ mod tests {
     fn already_logged_in_returns_without_opening_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        let app_path = create_installed_app(&paths, Edition::Pro);
         write_pro_login_cookie(&paths.home_dir);
         let opener = FakeOpener::default();
 
-        let outcome = login_with_opener(
+        let outcome = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Pro,
                 paths,
@@ -243,11 +255,13 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap();
 
         assert_eq!(outcome.status, "already_logged_in");
         assert_eq!(outcome.login_state, LoginState::LoggedIn);
+        assert_eq!(outcome.app_path, app_path);
         assert_eq!(outcome.waited_seconds, 0);
         assert!(opener.opened.borrow().is_empty());
     }
@@ -256,12 +270,11 @@ mod tests {
     fn pro_oauth_cookies_without_user_id_do_not_short_circuit_login() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        let app_path = create_installed_app(&paths, Edition::Pro);
         write_pro_oauth_cookies_without_user_id(&paths.home_dir);
         let opener = FakeOpener::default();
 
-        let error = login_with_opener(
+        let error = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Pro,
                 paths,
@@ -270,6 +283,7 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -281,14 +295,13 @@ mod tests {
     fn opens_app_and_returns_when_login_marker_appears() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        let app_path = create_installed_app(&paths, Edition::Pro);
         let opener = LoginWritingOpener {
             opened: RefCell::new(Vec::new()),
             home_dir: paths.home_dir.clone(),
         };
 
-        let outcome = login_with_opener(
+        let outcome = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Pro,
                 paths,
@@ -297,6 +310,7 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -311,7 +325,7 @@ mod tests {
         let paths = test_paths(temp.path());
         let opener = FakeOpener::default();
 
-        let error = login_with_opener(
+        let error = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Local,
                 paths,
@@ -320,6 +334,7 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -331,13 +346,10 @@ mod tests {
     fn refuses_invalid_app() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        create_fake_app(
-            &paths.applications_dir.join("Chat2DB Pro.app"),
-            "com.example.other",
-        );
+        create_invalid_app(&paths, Edition::Pro);
         let opener = FakeOpener::default();
 
-        let error = login_with_opener(
+        let error = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Pro,
                 paths,
@@ -346,6 +358,7 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -357,11 +370,10 @@ mod tests {
     fn times_out_when_login_state_does_not_change() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Local.app");
-        create_fake_app(&app_path, "com.chat2db.local");
+        let app_path = create_installed_app(&paths, Edition::Local);
         let opener = FakeOpener::default();
 
-        let error = login_with_opener(
+        let error = login_with_opener_and_verifier(
             LoginRequest {
                 edition: Edition::Local,
                 paths,
@@ -370,29 +382,12 @@ mod tests {
                 progress: false,
             },
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
         assert!(matches!(error, Chat2DbError::LoginTimedOut { .. }));
         assert_eq!(opener.opened.borrow().as_slice(), &[app_path]);
-    }
-
-    fn test_paths(root: &Path) -> SystemPaths {
-        let applications_dir = root.join("Applications");
-        let home_dir = root.join("home");
-        fs::create_dir_all(&applications_dir).unwrap();
-        fs::create_dir_all(&home_dir).unwrap();
-        SystemPaths {
-            applications_dir,
-            home_dir,
-            background_state_dir: root.join("state"),
-        }
-    }
-
-    fn create_fake_app(app_path: &Path, bundle_id: &str) {
-        let contents = app_path.join("Contents");
-        fs::create_dir_all(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), plist_xml(bundle_id)).unwrap();
     }
 
     fn write_pro_login_cookie(home_dir: &Path) {
@@ -422,19 +417,5 @@ mod tests {
             }"#,
         )
         .unwrap();
-    }
-
-    fn plist_xml(bundle_id: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key>
-  <string>{bundle_id}</string>
-</dict>
-</plist>
-"#
-        )
     }
 }

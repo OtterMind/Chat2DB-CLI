@@ -145,6 +145,7 @@ fn installs_fake_local_dmg_into_injected_applications_dir() {
     verify_app_bundle(&outcome.app_path, Edition::Local).unwrap();
 }
 
+#[cfg(not(windows))]
 #[test]
 fn installs_fake_windows_pro_exe_into_local_app_data() {
     let temp = tempfile::tempdir().unwrap();
@@ -190,6 +191,42 @@ fn installs_fake_windows_pro_exe_into_local_app_data() {
     verify_app_bundle(&outcome.app_path, Edition::Pro).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn rejects_fake_windows_exe_without_matching_msi_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = test_paths(temp.path());
+    let (client, _, registry) = desktop_artifact_client(
+        Edition::Pro,
+        HostOs::Windows,
+        current_test_arch(),
+        "3.1.15",
+        b"fake-exe",
+    );
+    let installer = Installer::with_artifact_installer(
+        client,
+        paths,
+        FakeArtifactInstaller {
+            app_name: "unused.app",
+            bundle_id: "unused",
+        },
+    )
+    .with_desktop_artifact_registry(registry);
+
+    let error = installer
+        .install_for_os(
+            InstallRequest {
+                edition: Edition::Pro,
+                force: false,
+                progress: false,
+            },
+            HostOs::Windows,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Chat2DbError::BundleIdMismatch { .. }));
+}
+
 #[test]
 fn installs_community_dmg_from_compiled_registry() {
     let temp = tempfile::tempdir().unwrap();
@@ -233,6 +270,7 @@ fn installs_community_dmg_from_compiled_registry() {
     verify_app_bundle(&outcome.app_path, Edition::Community).unwrap();
 }
 
+#[cfg(not(windows))]
 #[test]
 fn installs_community_msi_from_compiled_registry() {
     let temp = tempfile::tempdir().unwrap();

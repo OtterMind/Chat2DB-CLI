@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use fs2::FileExt;
+use fs2::{FileExt, lock_contended_error};
 
 use crate::error::{Chat2DbError, Result};
 
@@ -165,9 +165,25 @@ pub fn try_acquire_exclusive_lock(path: &Path) -> Result<Option<ExclusiveLock>> 
     let file = open_private_file(path)?;
     match FileExt::try_lock_exclusive(&file) {
         Ok(()) => Ok(Some(ExclusiveLock { file })),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) if is_lock_contended(&error) => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+fn is_lock_contended(error: &std::io::Error) -> bool {
+    let expected_raw_error = lock_contended_error().raw_os_error();
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || expected_raw_error.is_some() && error.raw_os_error() == expected_raw_error
+}
+
+pub fn sync_file(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    #[cfg(not(windows))]
+    let file = File::open(path)?;
+
+    file.sync_all()?;
+    Ok(())
 }
 
 pub fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<()> {
@@ -457,6 +473,15 @@ mod tests {
         write_private_atomic(&path, b"second\n").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"second\n");
+    }
+
+    #[test]
+    fn sync_file_accepts_a_writable_regular_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("staged.bin");
+        fs::write(&path, b"staged").unwrap();
+
+        sync_file(&path).unwrap();
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -932,8 +932,7 @@ fn probe_http_endpoint(url: &str, timeout: Duration) -> EndpointState {
 
     let mut stream = match TcpStream::connect_timeout(&addr, timeout) {
         Ok(stream) => stream,
-        Err(error) if is_timeout(&error) => return EndpointState::Timeout,
-        Err(_) => return EndpointState::NotListening,
+        Err(error) => return connect_error_state(addr, &error),
     };
 
     let _ = stream.set_read_timeout(Some(timeout));
@@ -978,6 +977,16 @@ fn is_timeout(error: &std::io::Error) -> bool {
         error.kind(),
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
     )
+}
+
+fn connect_error_state(addr: SocketAddr, error: &std::io::Error) -> EndpointState {
+    // Windows may surface a closed loopback port as a connect timeout. Reserve
+    // Timeout for remote connects or an established local socket that stalls.
+    if is_timeout(error) && !addr.ip().is_loopback() {
+        EndpointState::Timeout
+    } else {
+        EndpointState::NotListening
+    }
 }
 
 #[cfg(test)]
@@ -1044,16 +1053,26 @@ mod tests {
 
     impl ProcessProbe for FakeProcessProbe {
         fn pids(&self, app_path: &Path) -> Result<Vec<u32>> {
-            let path = app_path.to_string_lossy();
-            let running = if path.contains("Chat2DB Pro.app") {
+            let running = if app_path_matches_edition(app_path, Edition::Pro) {
                 Self::next_state(&self.pro_running)
-            } else if path.contains("Chat2DB Local.app") {
+            } else if app_path_matches_edition(app_path, Edition::Local) {
                 Self::next_state(&self.local_running)
             } else {
                 false
             };
             Ok(if running { vec![4242] } else { vec![] })
         }
+    }
+
+    fn app_path_matches_edition(app_path: &Path, edition: Edition) -> bool {
+        let Some(file_name) = app_path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let macos_name = format!("{}.app", edition.app_name());
+        let dashed_windows_name = format!("{}.exe", edition.app_name().replace(' ', "-"));
+        file_name == macos_name
+            || file_name.eq_ignore_ascii_case(edition.windows_exe_name())
+            || file_name.eq_ignore_ascii_case(&dashed_windows_name)
     }
 
     #[derive(Debug)]
@@ -1246,6 +1265,54 @@ mod tests {
 
         assert_eq!(token.len(), 32);
         assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn fake_process_probe_recognizes_host_specific_app_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_paths(temp.path());
+        let probe = FakeProcessProbe::new(vec![true], vec![true]);
+
+        assert_eq!(
+            probe
+                .pids(&Edition::Pro.app_path(&paths.applications_dir))
+                .unwrap(),
+            vec![4242]
+        );
+        assert_eq!(
+            probe
+                .pids(&Edition::Local.app_path(&paths.applications_dir))
+                .unwrap(),
+            vec![4242]
+        );
+        assert!(
+            probe
+                .pids(&Edition::Community.app_path(&paths.applications_dir))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(app_path_matches_edition(
+            Path::new("C:/Chat2DB/Chat2DB Pro/Chat2DB Pro.exe"),
+            Edition::Pro
+        ));
+        assert!(app_path_matches_edition(
+            Path::new("C:/Chat2DB/Chat2DB-Local/Chat2DB-Local.exe"),
+            Edition::Local
+        ));
+    }
+
+    #[test]
+    fn loopback_connect_timeout_is_not_listening_but_remote_timeout_is_timeout() {
+        let timeout = std::io::Error::from(std::io::ErrorKind::TimedOut);
+
+        assert_eq!(
+            connect_error_state("127.0.0.1:11924".parse().unwrap(), &timeout),
+            EndpointState::NotListening
+        );
+        assert_eq!(
+            connect_error_state("192.0.2.1:11924".parse().unwrap(), &timeout),
+            EndpointState::Timeout
+        );
     }
 
     #[test]

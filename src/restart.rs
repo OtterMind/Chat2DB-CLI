@@ -6,12 +6,12 @@ use serde::Serialize;
 
 use crate::edition::Edition;
 use crate::error::{Chat2DbError, Result};
-use crate::installer::SystemPaths;
+use crate::installer::{AppVerifier, SystemPaths, verify_app_bundle};
 use crate::login::AppOpener;
 use crate::process::{PgrepProbe, ProcessProbe};
 use crate::runtime::acquire_edition_lifecycle_lock;
-use crate::start::{BackgroundAppOpener, StartRequest, start_with_opener_locked};
-use crate::stop::{AppQuitter, OsascriptQuitter, StopRequest, stop_with_locked};
+use crate::start::{BackgroundAppOpener, StartRequest, start_with_opener_locked_and_verifier};
+use crate::stop::{AppQuitter, OsascriptQuitter, StopRequest, stop_with_locked_and_verifier};
 
 const RESTART_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const RESTART_WAIT_INTERVAL: Duration = Duration::from_millis(200);
@@ -50,6 +50,16 @@ pub fn restart_with<P: ProcessProbe + Clone, Q: AppQuitter, O: AppOpener>(
     quitter: Q,
     opener: O,
 ) -> Result<RestartOutcome> {
+    restart_with_and_verifier(request, probe, quitter, opener, verify_app_bundle)
+}
+
+fn restart_with_and_verifier<P: ProcessProbe + Clone, Q: AppQuitter, O: AppOpener>(
+    request: RestartRequest,
+    probe: P,
+    quitter: Q,
+    opener: O,
+    app_verifier: AppVerifier,
+) -> Result<RestartOutcome> {
     restart_with_timing(
         request,
         probe,
@@ -57,6 +67,7 @@ pub fn restart_with<P: ProcessProbe + Clone, Q: AppQuitter, O: AppOpener>(
         opener,
         RESTART_WAIT_TIMEOUT,
         RESTART_WAIT_INTERVAL,
+        app_verifier,
     )
 }
 
@@ -67,15 +78,17 @@ fn restart_with_timing<P: ProcessProbe + Clone, Q: AppQuitter, O: AppOpener>(
     opener: O,
     wait_timeout: Duration,
     wait_interval: Duration,
+    app_verifier: AppVerifier,
 ) -> Result<RestartOutcome> {
     let _lock = acquire_edition_lifecycle_lock(&request.paths, request.edition)?;
-    let stop_outcome = stop_with_locked(
+    let stop_outcome = stop_with_locked_and_verifier(
         StopRequest {
             edition: request.edition,
             paths: request.paths.clone(),
         },
         probe.clone(),
         quitter,
+        app_verifier,
     )?;
 
     if stop_outcome.status == "stopped"
@@ -87,12 +100,13 @@ fn restart_with_timing<P: ProcessProbe + Clone, Q: AppQuitter, O: AppOpener>(
         });
     }
 
-    let start_outcome = start_with_opener_locked(
+    let start_outcome = start_with_opener_locked_and_verifier(
         StartRequest {
             edition: request.edition,
             paths: request.paths,
         },
         opener,
+        app_verifier,
     )?;
 
     Ok(RestartOutcome {
@@ -127,10 +141,10 @@ fn wait_for_app_exit<P: ProcessProbe + ?Sized>(
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
-    use std::fs;
     use std::path::Path;
 
     use super::*;
+    use crate::test_support::{create_installed_app, test_paths, verify_app_fixture};
     #[derive(Debug)]
     struct FakeProbe {
         running: RefCell<VecDeque<bool>>,
@@ -189,14 +203,13 @@ mod tests {
     fn restart_running_app_quits_then_opens() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        let app_path = create_installed_app(&paths, Edition::Pro);
 
         let probe = FakeProbe::new([true, true, false]);
         let quitter = FakeQuitter::default();
         let opener = FakeOpener::default();
 
-        let outcome = restart_with(
+        let outcome = restart_with_and_verifier(
             RestartRequest {
                 edition: Edition::Pro,
                 paths,
@@ -204,6 +217,7 @@ mod tests {
             &probe,
             &quitter,
             &opener,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -218,14 +232,13 @@ mod tests {
     fn restart_when_not_running_skips_quit_but_still_opens() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Local.app");
-        create_fake_app(&app_path, "com.chat2db.local");
+        let app_path = create_installed_app(&paths, Edition::Local);
 
         let probe = FakeProbe::new([false]);
         let quitter = FakeQuitter::default();
         let opener = FakeOpener::default();
 
-        let outcome = restart_with(
+        let outcome = restart_with_and_verifier(
             RestartRequest {
                 edition: Edition::Local,
                 paths,
@@ -233,6 +246,7 @@ mod tests {
             &probe,
             &quitter,
             &opener,
+            verify_app_fixture,
         )
         .unwrap();
 
@@ -251,7 +265,7 @@ mod tests {
         let quitter = FakeQuitter::default();
         let opener = FakeOpener::default();
 
-        let error = restart_with(
+        let error = restart_with_and_verifier(
             RestartRequest {
                 edition: Edition::Pro,
                 paths,
@@ -259,6 +273,7 @@ mod tests {
             &probe,
             &quitter,
             &opener,
+            verify_app_fixture,
         )
         .unwrap_err();
 
@@ -271,8 +286,7 @@ mod tests {
     fn restart_aborts_when_previous_process_does_not_exit() {
         let temp = tempfile::tempdir().unwrap();
         let paths = test_paths(temp.path());
-        let app_path = paths.applications_dir.join("Chat2DB Pro.app");
-        create_fake_app(&app_path, "com.chat2db.pro");
+        create_installed_app(&paths, Edition::Pro);
         let probe = FakeProbe::new([true, true]);
         let quitter = FakeQuitter::default();
         let opener = FakeOpener::default();
@@ -287,42 +301,11 @@ mod tests {
             &opener,
             Duration::from_millis(3),
             Duration::from_millis(1),
+            verify_app_fixture,
         )
         .unwrap_err();
 
         assert!(matches!(error, Chat2DbError::RestartAppStillRunning { .. }));
         assert!(opener.opened.borrow().is_empty());
-    }
-
-    fn test_paths(root: &Path) -> SystemPaths {
-        let applications_dir = root.join("Applications");
-        let home_dir = root.join("home");
-        fs::create_dir_all(&applications_dir).unwrap();
-        fs::create_dir_all(&home_dir).unwrap();
-        SystemPaths {
-            applications_dir,
-            home_dir,
-            background_state_dir: root.join("state"),
-        }
-    }
-
-    fn create_fake_app(app_path: &Path, bundle_id: &str) {
-        let contents = app_path.join("Contents");
-        fs::create_dir_all(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), plist_xml(bundle_id)).unwrap();
-    }
-
-    fn plist_xml(bundle_id: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key>
-  <string>{bundle_id}</string>
-</dict>
-</plist>
-"#
-        )
     }
 }

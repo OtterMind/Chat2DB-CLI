@@ -22,7 +22,7 @@ use crate::platform::configure_detached_command;
 use crate::platform::write_private_atomic;
 use crate::platform::{
     ExclusiveLock, HostOs, acquire_exclusive_lock, current_arch_label, current_cli_os_label,
-    current_os, home_dir, process_exists, process_identity,
+    current_os, home_dir, process_exists, process_identity, sync_file,
 };
 
 const SCHEDULE_MARKER_GRACE: Duration = Duration::from_secs(30);
@@ -623,7 +623,7 @@ fn replace_binary(
     lock_path: &Path,
     installing_new_target: bool,
 ) -> Result<&'static str> {
-    fs::File::open(source)?.sync_all()?;
+    sync_file(source)?;
 
     if current_os() == HostOs::Windows
         && std::env::current_exe()
@@ -647,7 +647,7 @@ fn replace_binary(
         .join(format!("previous-{}", cli_binary_name()));
     if replacing {
         fs::copy(target, &backup)?;
-        fs::File::open(&backup)?.sync_all()?;
+        sync_file(&backup)?;
     }
 
     if let Err(update_error) = fs::rename(source, target) {

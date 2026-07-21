@@ -44,8 +44,12 @@ bash scripts/dev-install-skill.sh --client codex
 
 The first command installs both the CLI and Codex Skill. The second installs
 both for Claude Code, and the third refreshes only the Codex Skill. The scripts
-reject symlink and Git-managed targets, use rollback-capable replacement, and
-accept `--target`/`--skill-target` plus `--force` for explicit custom targets.
+require Bash, reject symlink and Git-managed targets, and accept
+`--target`/`--skill-target` plus `--force` for explicit custom targets. The
+combined command treats the CLI and Skill as one recoverable transaction and
+uses installer provenance before replacing an existing target. On Windows,
+use Git Bash, MSYS2, or Cygwin; there is no native PowerShell development
+installer.
 
 ## Pull Requests
 

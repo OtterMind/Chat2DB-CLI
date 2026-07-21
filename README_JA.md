@@ -208,6 +208,12 @@ bash scripts/dev-install.sh --client claude-code
 bash scripts/dev-install-skill.sh --client codex
 ```
 
+これらの開発用インストーラーには Bash が必要です。Windows では Git Bash、MSYS2、
+または Cygwin から実行してください。ネイティブ PowerShell 版の開発用インストーラーは
+提供していません。統合コマンドは CLI と Skill を同時に Commit し、失敗または中断時に
+両方を復元します。一致するインストーラー provenance がない Target を引き継ぐ場合は
+`--force` が必要です。
+
 ## 開発
 
 Pull Request を作成する前に実行します。

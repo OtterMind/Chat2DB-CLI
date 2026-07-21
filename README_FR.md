@@ -221,6 +221,12 @@ bash scripts/dev-install.sh --client claude-code
 bash scripts/dev-install-skill.sh --client codex
 ```
 
+Ces installateurs de développement nécessitent Bash. Sous Windows, exécutez-les
+depuis Git Bash, MSYS2 ou Cygwin ; aucun installateur de développement PowerShell
+natif n'est fourni. La commande combinée valide la CLI et le Skill ensemble,
+restaure les deux après un échec ou une interruption, et exige `--force` avant
+de prendre en charge une cible sans provenance correspondante.
+
 ## Développement
 
 Avant d'ouvrir une pull request, exécutez :

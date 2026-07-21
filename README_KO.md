@@ -207,6 +207,11 @@ bash scripts/dev-install.sh --client claude-code
 bash scripts/dev-install-skill.sh --client codex
 ```
 
+이 개발 설치 프로그램에는 Bash가 필요합니다. Windows에서는 Git Bash, MSYS2 또는
+Cygwin에서 실행하십시오. 네이티브 PowerShell 개발 설치 프로그램은 제공되지 않습니다.
+통합 명령은 CLI와 Skill을 함께 커밋하고 실패하거나 중단된 설치 후 둘 다 복원하며,
+일치하는 설치 provenance가 없는 대상을 인수하려면 `--force`가 필요합니다.
+
 ## 개발
 
 Pull Request를 열기 전에 실행합니다.

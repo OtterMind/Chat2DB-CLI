@@ -105,6 +105,10 @@ jobs:
       - name: Run Windows Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      - name: Test Windows development installation
+        shell: bash
+        run: bash tests/dev_install_windows_smoke.sh
+
   supply-chain:
     name: Dependency, license, and secret policy
     runs-on: ubuntu-24.04

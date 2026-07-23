@@ -1,6 +1,6 @@
 # Skill Changelog
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-07-23
 
 - Moved the Chat2DB CLI Skill into the Chat2DB-CLI repository.
 - Added Community as the default edition while retaining Pro, Local, and

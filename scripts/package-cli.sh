@@ -207,28 +207,26 @@ else:
     raise SystemExit(f"error: unsupported archive type: {archive_type}")
 PY
 
-archive_contents="$("$PYTHON_BIN" - "$REPO_ROOT/dist/$ARCHIVE_NAME" "$ARCHIVE_TYPE" <<'PY'
+"$PYTHON_BIN" - "$REPO_ROOT/dist/$ARCHIVE_NAME" "$ARCHIVE_TYPE" "$BINARY_NAME" <<'PY'
 import sys
 import tarfile
 import zipfile
 
-path, archive_type = sys.argv[1], sys.argv[2]
+path, archive_type, binary_name = sys.argv[1:]
 if archive_type == "zip":
     with zipfile.ZipFile(path) as archive:
-        for name in archive.namelist():
-            print(name)
+        archive_contents = archive.namelist()
 else:
     with tarfile.open(path, "r:gz") as archive:
-        for member in archive.getmembers():
-            print(member.name)
+        archive_contents = [member.name for member in archive.getmembers()]
+
+expected_archive_contents = ["LICENSE", "THIRD_PARTY_LICENSES.txt", binary_name]
+if archive_contents != expected_archive_contents:
+    print("error: non-sanitized archive contents:", file=sys.stderr)
+    for name in archive_contents:
+        print(f"  {name!r}", file=sys.stderr)
+    raise SystemExit(1)
 PY
-)"
-expected_archive_contents="$(printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt "$BINARY_NAME")"
-if [ "$archive_contents" != "$expected_archive_contents" ]; then
-  echo "error: non-sanitized archive contents:" >&2
-  printf '%s\n' "$archive_contents" >&2
-  exit 1
-fi
 
 # --- compute sha256 ---------------------------------------------------------
 if command -v shasum >/dev/null 2>&1; then

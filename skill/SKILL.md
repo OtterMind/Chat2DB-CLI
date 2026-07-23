@@ -2,7 +2,7 @@
 name: chat2db-cli
 description: "Operate Chat2DB Community, Pro, and Local through the chat2db CLI: inspect status, manage the app and headless runtime, work with datasources and SQL, configure MCP, manage the Skill, and update the CLI. Use for CLI-driven Chat2DB workflows, not GUI interaction."
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   compatible-cli-versions: ">=0.2, <0.3"
 ---
 

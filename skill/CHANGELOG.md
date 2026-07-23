@@ -1,5 +1,10 @@
 # Skill Changelog
 
+## [0.2.1] - 2026-07-23
+
+- Fixed Windows release archive validation and added native Windows packaging
+  coverage.
+
 ## [0.2.0] - 2026-07-23
 
 - Moved the Chat2DB CLI Skill into the Chat2DB-CLI repository.

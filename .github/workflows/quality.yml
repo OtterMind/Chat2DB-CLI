@@ -105,6 +105,12 @@ jobs:
       - name: Run Windows Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      - name: Check reproducible CLI packages on Windows
+        shell: bash
+        env:
+          PYTHON_BIN: python
+        run: bash tests/package_cli_reproducibility.sh
+
       - name: Test Windows development installation
         shell: bash
         run: bash tests/dev_install_windows_smoke.sh

@@ -30,7 +30,7 @@ tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
 url = "2"
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 assert_cmd = "2"

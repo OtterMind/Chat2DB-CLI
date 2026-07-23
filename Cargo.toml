@@ -1,6 +1,6 @@
 [package]
 name = "chat2db"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Official command-line interface for Chat2DB Community, Pro, and Local"

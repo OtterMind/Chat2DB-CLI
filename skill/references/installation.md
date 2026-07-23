@@ -2,7 +2,7 @@
 
 This file is for installing, updating, and removing the `chat2db` CLI binary and the skill bundle.
 
-The bundled Skill version is `0.2.0` and supports CLI versions
+The bundled Skill version is `0.2.1` and supports CLI versions
 `>=0.2, <0.3`.
 
 ## CLI Binary

@@ -86,7 +86,7 @@ cat > "$CARGO_TARGET_DIR/release/chat2db$suffix" <<SCRIPT
 #!/usr/bin/env bash
 # build-marker: ${CHAT2DB_TEST_BUILD_MARKER:-initial}
 case "\${1:-}" in
-  version) echo "chat2db 0.2.0" ;;
+  version) echo "chat2db 0.2.1" ;;
   completions) exit 0 ;;
   *) exit 0 ;;
 esac
@@ -272,7 +272,7 @@ mkdir -p "$fixture/target/release"
 cat > "$fixture/target/release/chat2db" <<EOF
 #!/usr/bin/env bash
 : > "$stale_build_sentinel"
-echo "chat2db 0.2.0"
+echo "chat2db 0.2.1"
 EOF
 chmod 0755 "$fixture/target/release/chat2db"
 run_combined "$fixture" "$home" "$home/bin" "$home/skill" "$TEST_ROOT/stale-build.log"
@@ -288,7 +288,7 @@ mkdir -p "$fixture/target/dev-install/release"
 cat > "$fixture/target/dev-install/release/chat2db" <<EOF
 #!/usr/bin/env bash
 : > "$stale_dev_sentinel"
-echo "chat2db 0.2.0"
+echo "chat2db 0.2.1"
 EOF
 chmod 0755 "$fixture/target/dev-install/release/chat2db"
 if CHAT2DB_TEST_CARGO_NO_OUTPUT=1 run_combined \
@@ -329,7 +329,7 @@ mkdir -p "$bin_dir"
 cat > "$bin_dir/chat2db" <<EOF
 #!/usr/bin/env bash
 : > "$execution_sentinel"
-echo "chat2db 0.2.0"
+echo "chat2db 0.2.1"
 EOF
 chmod 0755 "$bin_dir/chat2db"
 if run_combined "$fixture" "$home" "$bin_dir" "$skill_target" "$TEST_ROOT/unknown-cli.log"; then
@@ -394,7 +394,7 @@ if run_skill "$fixture" "$home" "$skill_target" "$TEST_ROOT/wrong-skill-provenan
 fi
 assert_contains "$TEST_ROOT/wrong-skill-provenance-version.log" "pass --force"
 run_skill "$fixture" "$home" "$skill_target" "$TEST_ROOT/wrong-skill-provenance-version-force.log" --force
-assert_contains "$skill_sidecar" "version=0.2.0"
+assert_contains "$skill_sidecar" "version=0.2.1"
 
 # Client defaults resolve to the documented Codex and Claude Code locations.
 fixture="$(new_fixture clients)"
@@ -776,7 +776,7 @@ assert_absent "$guard"
 fixture="$(new_fixture version-mismatch)"
 home="$TEST_ROOT/home-version"
 mkdir -p "$home"
-sed -i.bak 's/^version = "0.2.0"$/version = "0.2.1"/' "$fixture/Cargo.toml"
+sed -i.bak 's/^version = "0.2.1"$/version = "0.2.2"/' "$fixture/Cargo.toml"
 rm -f "$fixture/Cargo.toml.bak"
 if run_skill "$fixture" "$home" "$home/skill" "$TEST_ROOT/version-mismatch.log"; then
   fail "Cargo and Skill version mismatch was accepted"

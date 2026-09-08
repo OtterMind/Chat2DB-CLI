@@ -374,6 +374,29 @@ mod unix_install_tests {
     }
 
     #[test]
+    fn install_script_accepts_manifest_base_under_non_c_locale() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let release = FakeRelease::start();
+        let lowercase_manifest_base = release.manifest_base_url.replace("127.0.0.1", "localhost");
+
+        let output = run_installer(
+            &home,
+            Some("/bin/zsh"),
+            &release,
+            &["--no-modify-path"],
+            &[
+                ("CHAT2DB_CLI_MANIFEST_BASE", &lowercase_manifest_base),
+                ("LC_ALL", "en_US.UTF-8"),
+            ],
+        );
+
+        assert_success(&output);
+        assert!(stdout(&output).contains("installed:"));
+    }
+
+    #[test]
     fn install_script_rejects_noncanonical_manifest_bases() {
         for base in [
             "http://example.com",

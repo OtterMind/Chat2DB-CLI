@@ -20,6 +20,11 @@
 #
 set -eu
 
+# Keep ASCII validation independent of the user's locale. On macOS, locale
+# collation can make shell ranges such as [A-Z] match lowercase characters.
+LC_ALL=C
+export LC_ALL
+
 if [ -z "${HOME:-}" ] && [ -z "${CHAT2DB_CLI_BIN_DIR:-}" ]; then
   echo "error: HOME is not set; set CHAT2DB_CLI_BIN_DIR to choose an install directory" >&2
   exit 1
